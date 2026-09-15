@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>ACID GOBLIN // TRIP ENGINE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Monoton&display=swap" rel="stylesheet">
 <style>
   :root { color-scheme: dark; }
   html, body {
@@ -25,25 +28,40 @@
   #hint.hidden { opacity: 0; }
 
   #title {
-    position: fixed; top: 18px; left: 0; right: 0; text-align: center;
-    color: #fff; font-size: 15px; letter-spacing: 0.3em; font-weight: bold;
-    text-shadow: 0 0 10px #0ff, 0 0 20px #f0f;
+    position: fixed; top: 14px; left: 0; right: 0; text-align: center;
+    font-family: 'Monoton', cursive;
+    font-size: clamp(20px, 5vw, 34px);
+    letter-spacing: 0.08em;
+    line-height: 1.15;
+    background: linear-gradient(90deg, #ff2fd0, #ffd23f, #2fe8ff, #ff2fd0);
+    background-size: 300% auto;
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    -webkit-text-stroke: 1px rgba(255,255,255,0.25);
+    filter: drop-shadow(0 0 10px rgba(255,0,220,0.5)) drop-shadow(0 0 18px rgba(0,230,255,0.35));
+    opacity: 0.55;
     pointer-events: none;
-    animation: pulseTitle 3s ease-in-out infinite;
+    animation: pulseTitle 4s ease-in-out infinite, hueTravel 8s linear infinite;
   }
   @keyframes pulseTitle {
-    0%, 100% { opacity: 0.55; }
-    50% { opacity: 1; }
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.65; }
+  }
+  @keyframes hueTravel {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 300% 50%; }
   }
 
-  #muteBtn {
-    position: fixed; top: 16px; right: 16px; z-index: 10;
+  #muteBtn, #bgBtn {
+    position: fixed; top: 16px; z-index: 10;
     width: 40px; height: 40px; border-radius: 50%;
     border: 1px solid rgba(255,255,255,0.4);
     background: rgba(0,0,0,0.35); color: #fff;
     font-size: 16px; display: flex; align-items: center; justify-content: center;
     cursor: pointer;
   }
+  #muteBtn { right: 16px; }
+  #bgBtn { right: 64px; }
 
   #loading {
     position: fixed; inset: 0; background: #05010a;
@@ -79,6 +97,7 @@
 <canvas id="gl"></canvas>
 <div id="title">ACID GOBLIN &middot; TRIP ENGINE</div>
 <div id="hint">touch the screen. hold and drag to melt it. more fingers, more madness.</div>
+<button id="bgBtn" aria-label="change background">&#127752;</button>
 <button id="muteBtn" aria-label="toggle sound">&#128266;</button>
 
 <script src="bg-data.js"></script>
@@ -409,7 +428,6 @@ function loadTexture(dataUri) {
 
 const pointers = new Map(); // id -> {x,y (0..1 y-up), px, py, speed, downTime}
 let zones = []; // {id, x, y, heat, active}
-let lastMoveTime = performance.now();
 
 function clamp01(v, fallback) {
   return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : fallback;
@@ -439,7 +457,6 @@ function onPointerDown(e) {
   }
   synthNoteOn(e.pointerId, x, y);
   document.getElementById('hint').classList.add('hidden');
-  lastMoveTime = performance.now();
   e.preventDefault();
 }
 function onPointerMove(e) {
@@ -453,7 +470,6 @@ function onPointerMove(e) {
   const z = getZone(e.pointerId);
   if (z) { z.x = x; z.y = y; }
   synthNoteUpdate(e.pointerId, x, y, p.speed);
-  lastMoveTime = performance.now();
   e.preventDefault();
 }
 function onPointerUp(e) {
@@ -641,9 +657,15 @@ const blitU = getUniforms(blitProg, ['u_tex', 'u_grain', 'u_time']);
 
 /* ---------------- main loop ---------------- */
 
-let bgIndexA = 0, bgIndexB = 1, bgMix = 0;
-let lastSwitch = performance.now();
+let bgIndexA = 0, bgIndexB = 0, bgMix = 1;
 let lastFrameTime = performance.now();
+
+function changeBackground() {
+  bgIndexA = bgIndexB;
+  bgIndexB = (bgIndexB + 1) % BG_COUNT;
+  bgMix = 0;
+}
+document.getElementById('bgBtn').addEventListener('click', changeBackground);
 
 function draw() {
   requestAnimationFrame(draw);
@@ -653,7 +675,6 @@ function draw() {
   const time = now * 0.001;
   const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
   lastFrameTime = now;
-  const idleFor = (now - lastMoveTime) / 1000;
 
   // zone heat: grows while held (faster with drag speed and with more
   // simultaneous fingers), cools down once released
@@ -672,26 +693,9 @@ function draw() {
 
   const maxHeat = zones.reduce((m, z) => Math.max(m, z.heat), 0);
 
-  // slow ambient drift of the background pair when idle, snap towards touch-chosen index when active
-  if (pointers.size > 0) {
-    let avgX = 0;
-    pointers.forEach(p => { avgX += p.x; });
-    avgX /= pointers.size;
-    const targetIdx = Math.floor(avgX * BG_COUNT) % BG_COUNT;
-    if (targetIdx !== bgIndexB && now - lastSwitch > 260) {
-      bgIndexA = bgIndexB;
-      bgIndexB = targetIdx;
-      bgMix = 0;
-      lastSwitch = now;
-    }
-  } else if (idleFor > 2.5 && now - lastSwitch > 7000) {
-    bgIndexA = bgIndexB;
-    bgIndexB = (bgIndexB + 1) % BG_COUNT;
-    bgMix = 0;
-    lastSwitch = now;
-  }
-  const mixSpeed = pointers.size > 0 ? 0.06 : 0.008;
-  bgMix = Math.min(1, bgMix + mixSpeed);
+  // background only changes when the button is pressed (changeBackground());
+  // this just animates the crossfade once that happens
+  bgMix = Math.min(1, bgMix + 0.035);
 
   // zone uniforms: strongest MAX_ZONES by heat
   const sortedZones = zones.slice().sort((a, b) => b.heat - a.heat).slice(0, MAX_ZONES);
