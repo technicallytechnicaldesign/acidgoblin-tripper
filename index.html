@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>ACID GOBLIN // TRIP ENGINE</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #05010a; overflow: hidden;
+    font-family: 'Courier New', monospace;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; }
+
+  #hint {
+    position: fixed; left: 0; right: 0; bottom: 22px;
+    text-align: center; color: #fff; opacity: 0.75;
+    font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase;
+    pointer-events: none;
+    text-shadow: 0 0 8px #000, 0 0 16px #f0f;
+    transition: opacity 0.6s ease;
+  }
+  #hint.hidden { opacity: 0; }
+
+  #title {
+    position: fixed; top: 18px; left: 0; right: 0; text-align: center;
+    color: #fff; font-size: 15px; letter-spacing: 0.3em; font-weight: bold;
+    text-shadow: 0 0 10px #0ff, 0 0 20px #f0f;
+    pointer-events: none;
+    animation: pulseTitle 3s ease-in-out infinite;
+  }
+  @keyframes pulseTitle {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+  }
+
+  #muteBtn {
+    position: fixed; top: 16px; right: 16px; z-index: 10;
+    width: 40px; height: 40px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.4);
+    background: rgba(0,0,0,0.35); color: #fff;
+    font-size: 16px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+
+  #loading {
+    position: fixed; inset: 0; background: #05010a;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; color: #fff; z-index: 20;
+    transition: opacity 0.5s ease;
+  }
+  #loading .bar {
+    width: 200px; height: 4px; background: rgba(255,255,255,0.15);
+    margin-top: 14px; border-radius: 2px; overflow: hidden;
+  }
+  #loading .fill {
+    height: 100%; width: 0%; background: linear-gradient(90deg, #0ff, #f0f, #ff0);
+    transition: width 0.2s ease;
+  }
+  #loading .txt {
+    letter-spacing: 0.25em; font-size: 12px; text-transform: uppercase; opacity: 0.8;
+  }
+  #loading .err {
+    margin-top: 16px; color: #f66; font-size: 11px; letter-spacing: 0.08em;
+    max-width: 320px; text-align: center; text-transform: none; display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="txt">summoning the goblin</div>
+  <div class="bar"><div class="fill" id="loadFill"></div></div>
+  <div class="err" id="loadErr"></div>
+</div>
+
+<canvas id="gl"></canvas>
+<div id="title">ACID GOBLIN &middot; TRIP ENGINE</div>
+<div id="hint">touch the screen. hold and drag to melt it. more fingers, more madness.</div>
+<button id="muteBtn" aria-label="toggle sound">&#128266;</button>
+
+<script src="bg-data.js"></script>
+<script>
+(function () {
+"use strict";
+
+/* ---------------------------------------------------------------------
+   ACID GOBLIN: TRIP ENGINE
+
+   Idle: the 10 backgrounds crossfade gently, untouched, just pretty.
+   Touch: a localized "madness zone" grows around each finger -- small
+   and mild at first touch, escalating into full kaleidoscope/chromatic-
+   aberration/feedback-trail chaos the longer and harder (more fingers)
+   you touch. Let go and the zone cools back down to the plain artwork.
+   Paired with a per-finger TB-303-style acid synth (Web Audio).
+
+   BG_DATA (the 10 background images as base64 data URIs) is loaded from
+   the sibling bg-data.js file so this stays a plain double-clickable
+   two-file app -- no server, no file:// texture-loading restrictions.
+--------------------------------------------------------------------- */
+
+if (typeof BG_DATA === 'undefined' || !BG_DATA.length) {
+  showFatal('bg-data.js did not load. Keep it next to index.html.');
+  return;
+}
+const BG_COUNT = BG_DATA.length;
+
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: false, alpha: false })
+        || canvas.getContext('experimental-webgl');
+
+if (!gl) {
+  showFatal('This goblin needs WebGL. Try a different browser.');
+  return;
+}
+
+function showFatal(msg) {
+  const el = document.getElementById('loadErr');
+  if (el) { el.textContent = msg; el.style.display = 'block'; }
+  console.error('[trip-engine]', msg);
+}
+
+/* ---------------- shaders ---------------- */
+
+const VERT_SRC = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`;
+
+const MAX_ZONES = 8;
+
+const MAIN_FRAG_SRC = `
+precision highp float;
+varying vec2 v_uv;
+
+uniform sampler2D u_bgA;
+uniform sampler2D u_bgB;
+uniform sampler2D u_prev;
+uniform float u_bgMix;
+uniform float u_time;
+uniform float u_aspect;
+
+uniform int u_zoneCount;
+uniform vec2 u_zonePos[${MAX_ZONES}];    // normalized 0..1, y-up
+uniform float u_zoneRadius[${MAX_ZONES}];
+uniform float u_zoneHeat[${MAX_ZONES}];  // 0..1, how "cooked" this zone is
+
+vec3 hueRotate(vec3 c, float a) {
+  float u = cos(a), w = sin(a);
+  mat3 m = mat3(
+    0.299 + 0.701*u + 0.168*w,  0.587 - 0.587*u + 0.330*w,  0.114 - 0.114*u - 0.497*w,
+    0.299 - 0.299*u - 0.328*w,  0.587 + 0.413*u + 0.035*w,  0.114 - 0.114*u + 0.292*w,
+    0.299 - 0.300*u + 1.250*w,  0.587 - 0.588*u - 1.050*w,  0.114 + 0.886*u - 0.203*w
+  );
+  return clamp(m * c, 0.0, 1.0);
+}
+
+vec2 aspectDelta(vec2 a, vec2 b) {
+  vec2 d = a - b;
+  d.x *= u_aspect;
+  return d;
+}
+
+void main() {
+  vec2 uv0 = v_uv;
+
+  // union weirdness mask across all zones, and track the strongest one
+  // (that's the zone whose local warp we actually apply). GLSL ES 1.0
+  // fragment shaders can't index a uniform array by a runtime variable,
+  // so the "best" zone's data is captured directly inside the loop.
+  float w = 0.0;
+  float bestMask = 0.0;
+  vec2 bestPos = vec2(0.5);
+  float bestRadius = 0.1;
+  float bestHeatVal = 0.0;
+  for (int i = 0; i < ${MAX_ZONES}; i++) {
+    if (i >= u_zoneCount) break;
+    vec2 zp = u_zonePos[i];
+    float zr = max(u_zoneRadius[i], 0.001);
+    float zh = u_zoneHeat[i];
+    float d = length(aspectDelta(uv0, zp));
+    float m = smoothstep(zr, 0.0, d) * zh;
+    w = 1.0 - (1.0 - w) * (1.0 - m);
+    if (m > bestMask) { bestMask = m; bestPos = zp; bestRadius = zr; bestHeatVal = zh; }
+  }
+  w = clamp(w, 0.0, 1.0);
+
+  vec2 weirdUV = uv0;
+  float localHeat = 0.0;
+
+  if (bestMask > 0.001) {
+    vec2 zp = bestPos;
+    float zr = bestRadius;
+    localHeat = bestHeatVal;
+
+    vec2 rel = aspectDelta(uv0, zp);
+    float d = length(rel);
+    float edgeFall = smoothstep(zr, 0.0, d);
+
+    // melt wobble, grows with heat
+    float wob = localHeat * 0.16 * sin(d * 26.0 - u_time * 3.2) * edgeFall;
+    rel += normalize(rel + 1e-5) * wob;
+    d = length(rel);
+
+    // local swirl, grows with heat
+    float swirlAmt = mix(0.25, 5.0, localHeat) * edgeFall;
+    float ca = cos(swirlAmt), sa = sin(swirlAmt);
+    rel = mat2(ca, -sa, sa, ca) * rel;
+
+    // kaleidoscope fold, segment count grows with heat
+    float segs = mix(1.3, 9.0, localHeat);
+    float ang = atan(rel.y, rel.x);
+    float seg = 6.28318530718 / max(segs, 1.0);
+    float am = mod(ang, seg);
+    am = abs(am - seg * 0.5);
+    vec2 folded = vec2(cos(am), sin(am)) * length(rel);
+    folded.x /= u_aspect;
+
+    weirdUV = mix(uv0, zp + folded, edgeFall);
+  }
+
+  // chromatic aberration, only where currently weird
+  vec2 abDir = normalize(weirdUV - 0.5 + 1e-5);
+  float abAmt = mix(0.0, 0.022, localHeat) * w;
+  vec2 uvR = weirdUV + abDir * abAmt;
+  vec2 uvG = weirdUV;
+  vec2 uvB = weirdUV - abDir * abAmt;
+
+  float r = mix(texture2D(u_bgA, uvR).r, texture2D(u_bgB, uvR).r, u_bgMix);
+  float g = mix(texture2D(u_bgA, uvG).g, texture2D(u_bgB, uvG).g, u_bgMix);
+  float b = mix(texture2D(u_bgA, uvB).b, texture2D(u_bgB, uvB).b, u_bgMix);
+  vec3 weirdCol = vec3(r, g, b);
+  weirdCol = hueRotate(weirdCol, localHeat * (u_time * 0.6 + bestMask * 2.0));
+
+  vec3 cleanCol = mix(texture2D(u_bgA, uv0).rgb, texture2D(u_bgB, uv0).rgb, u_bgMix);
+
+  vec3 col = mix(cleanCol, weirdCol, w);
+
+  // feedback trail: a short local after-image, sampled in place (no
+  // drift/rotation) so it can never smear a vortex around the canvas --
+  // only inside currently-weird pixels, so idle areas never ghost
+  vec3 prevCol = texture2D(u_prev, v_uv).rgb;
+  float fb = w * mix(0.0, 0.65, localHeat);
+  col = mix(col, prevCol, fb);
+
+  // gentle vignette, always present, not part of the "weird" system
+  float dist0 = length(v_uv - 0.5);
+  float vig = smoothstep(0.95, 0.35, dist0);
+  col *= mix(0.85, 1.02, vig);
+
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
+`;
+
+const BLIT_FRAG_SRC = `
+precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_grain;
+uniform float u_time;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(41.3,289.1))) * 43758.5453); }
+void main() {
+  vec3 c = texture2D(u_tex, v_uv).rgb;
+  float n = (hash(v_uv * u_time * 60.0) - 0.5) * u_grain;
+  c += n;
+  gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+`;
+
+function compile(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(sh));
+    throw new Error('shader compile failed');
+  }
+  return sh;
+}
+function link(vsSrc, fsSrc) {
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+    throw new Error('program link failed');
+  }
+  return prog;
+}
+
+let mainProg, blitProg;
+try {
+  mainProg = link(VERT_SRC, MAIN_FRAG_SRC);
+  blitProg = link(VERT_SRC, BLIT_FRAG_SRC);
+} catch (ex) {
+  showFatal('Shader setup failed: ' + ex.message);
+  return;
+}
+
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+function bindQuad(prog) {
+  const loc = gl.getAttribLocation(prog, 'a_pos');
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+}
+
+/* ---------------- framebuffers (ping-pong for feedback) ---------------- */
+
+let fboW = 2, fboH = 2;
+let fbos = [null, null];
+let fboTex = [null, null];
+let pingIndex = 0;
+
+function makeFBOTarget(w, h) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { fb, tex };
+}
+
+function rebuildFBOs() {
+  const scale = Math.min(1, 900 / Math.max(window.innerWidth, window.innerHeight));
+  fboW = Math.max(2, Math.floor(window.innerWidth * scale * (window.devicePixelRatio > 1 ? 0.85 : 1)));
+  fboH = Math.max(2, Math.floor(window.innerHeight * scale * (window.devicePixelRatio > 1 ? 0.85 : 1)));
+  for (let i = 0; i < 2; i++) {
+    const t = makeFBOTarget(fboW, fboH);
+    fbos[i] = t.fb;
+    fboTex[i] = t.tex;
+  }
+}
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  rebuildFBOs();
+}
+window.addEventListener('resize', resize);
+
+/* ---------------- load background textures (from embedded base64) ---------------- */
+
+const textures = [];
+let loadedCount = 0;
+let failedCount = 0;
+let fallbackTex = null;
+
+function makeFallbackTexture() {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  const px = new Uint8Array([20, 4, 24, 255]);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  return tex;
+}
+
+function loadTexture(dataUri) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let tex = null;
+      try {
+        tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      } catch (ex) {
+        console.warn('[trip-engine] texture upload failed', ex);
+        tex = null;
+      }
+      loadedCount++;
+      if (!tex) failedCount++;
+      document.getElementById('loadFill').style.width = (loadedCount / BG_COUNT * 100) + '%';
+      resolve(tex);
+    };
+    img.onerror = () => {
+      loadedCount++; failedCount++;
+      document.getElementById('loadFill').style.width = (loadedCount / BG_COUNT * 100) + '%';
+      resolve(null);
+    };
+    img.src = dataUri;
+  });
+}
+
+/* ---------------- touch / pointer state ---------------- */
+
+const pointers = new Map(); // id -> {x,y (0..1 y-up), px, py, speed, downTime}
+let zones = []; // {id, x, y, heat, active}
+let lastMoveTime = performance.now();
+
+function clamp01(v, fallback) {
+  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : fallback;
+}
+function normFromEvent(e) {
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width || 1, h = rect.height || 1;
+  const x = clamp01((e.clientX - rect.left) / w, 0.5);
+  const y = clamp01(1.0 - (e.clientY - rect.top) / h, 0.5); // y-up for shader
+  return { x, y };
+}
+function getZone(id) { return zones.find(z => z.id === id); }
+
+function onPointerDown(e) {
+  ensureAudio();
+  const { x, y } = normFromEvent(e);
+  pointers.set(e.pointerId, { x, y, px: x, py: y, speed: 0, downTime: performance.now() });
+  // reuse an existing zone for this id if one is still around (defensive
+  // against duplicate/re-fired down events with no matching up) instead
+  // of ever accumulating orphaned zones
+  const existing = getZone(e.pointerId);
+  if (existing) {
+    existing.x = x; existing.y = y; existing.active = true;
+    existing.heat = Math.max(existing.heat, 0.12);
+  } else {
+    zones.push({ id: e.pointerId, x, y, heat: 0.12, active: true });
+  }
+  synthNoteOn(e.pointerId, x, y);
+  document.getElementById('hint').classList.add('hidden');
+  lastMoveTime = performance.now();
+  e.preventDefault();
+}
+function onPointerMove(e) {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  const { x, y } = normFromEvent(e);
+  p.px = p.x; p.py = p.y;
+  p.x = x; p.y = y;
+  const dx = p.x - p.px, dy = p.y - p.py;
+  p.speed = Math.min(1, Math.sqrt(dx*dx + dy*dy) * 18);
+  const z = getZone(e.pointerId);
+  if (z) { z.x = x; z.y = y; }
+  synthNoteUpdate(e.pointerId, x, y, p.speed);
+  lastMoveTime = performance.now();
+  e.preventDefault();
+}
+function onPointerUp(e) {
+  pointers.delete(e.pointerId);
+  zones.forEach(z => { if (z.id === e.pointerId) z.active = false; });
+  synthNoteOff(e.pointerId);
+  e.preventDefault();
+}
+
+canvas.addEventListener('pointerdown', onPointerDown, { passive: false });
+canvas.addEventListener('pointermove', onPointerMove, { passive: false });
+canvas.addEventListener('pointerup', onPointerUp, { passive: false });
+canvas.addEventListener('pointercancel', onPointerUp, { passive: false });
+canvas.addEventListener('pointerleave', onPointerUp, { passive: false });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+/* ---------------- audio: per-finger TB-303-ish acid synth ---------------- */
+
+let actx = null;
+let masterGain, dryGain, wetGain, delayNode, delayFeedback, delayFilter, muted = false;
+const voices = new Map(); // pointerId -> {osc, filter, shaper, gain, lfo, lfoGain}
+
+// acid phrygian-ish scale, 2 octaves, semitone offsets from root
+const SCALE = [0, 1, 3, 5, 7, 8, 10, 12, 13, 15, 17, 19, 20, 22];
+const ROOT_MIDI = 33; // A1
+
+function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+
+function makeDistortionCurve(amount) {
+  const n = 256;
+  const curve = new Float32Array(n);
+  const k = amount;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = Math.tanh(k * x) / Math.tanh(k);
+  }
+  return curve;
+}
+
+function ensureAudio() {
+  if (actx) {
+    if (actx.state === 'suspended') actx.resume();
+    return;
+  }
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+
+  masterGain = actx.createGain();
+  masterGain.gain.value = 0.85;
+
+  dryGain = actx.createGain();
+  dryGain.gain.value = 0.75;
+  wetGain = actx.createGain();
+  wetGain.gain.value = 0.32;
+
+  delayNode = actx.createDelay(1.0);
+  delayNode.delayTime.value = 0.21;
+  delayFeedback = actx.createGain();
+  delayFeedback.gain.value = 0.38;
+  delayFilter = actx.createBiquadFilter();
+  delayFilter.type = 'lowpass';
+  delayFilter.frequency.value = 2200;
+
+  masterGain.connect(dryGain).connect(actx.destination);
+  masterGain.connect(delayNode);
+  delayNode.connect(delayFilter);
+  delayFilter.connect(delayFeedback);
+  delayFeedback.connect(delayNode);
+  delayFilter.connect(wetGain).connect(actx.destination);
+}
+
+function noteFor(x, y, voiceIndex) {
+  const yc = clamp01(y, 0.5);
+  const idx = Math.floor(yc * SCALE.length) % SCALE.length;
+  const octaveShift = (voiceIndex % 3) * 12;
+  const midi = ROOT_MIDI + SCALE[idx] + octaveShift;
+  return midiToFreq(midi);
+}
+function cutoffFor(x) {
+  const t = clamp01(x, 0.5);
+  return 150 * Math.pow(40, t);
+}
+function safeSetTarget(param, value, now, tc) {
+  if (!Number.isFinite(value)) return;
+  param.setTargetAtTime(value, now, tc);
+}
+
+function synthNoteOn(id, x, y) {
+  if (!actx || muted) return;
+  const now = actx.currentTime;
+  const voiceIndex = voices.size;
+
+  const osc = actx.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.value = noteFor(x, y, voiceIndex);
+  osc.detune.value = (Math.random() - 0.5) * 12;
+
+  const filter = actx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = cutoffFor(x);
+  filter.Q.value = 10;
+
+  const shaper = actx.createWaveShaper();
+  shaper.curve = makeDistortionCurve(2.2);
+  shaper.oversample = '2x';
+
+  const gain = actx.createGain();
+  gain.gain.value = 0.0001;
+
+  const lfo = actx.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 3.0;
+  const lfoGain = actx.createGain();
+  lfoGain.gain.value = 400;
+  lfo.connect(lfoGain).connect(filter.frequency);
+  lfo.start();
+
+  osc.connect(filter);
+  filter.connect(shaper);
+  shaper.connect(gain);
+  gain.connect(masterGain);
+
+  osc.start();
+
+  // recent-retrigger detection = accent (short time since last note anywhere = punchier)
+  const timeSinceLast = now - (synthNoteOn._lastTrigger || -10);
+  synthNoteOn._lastTrigger = now;
+  const accent = timeSinceLast < 0.18;
+  const peak = accent ? 0.34 : 0.22;
+
+  gain.gain.cancelScheduledValues(now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(peak, now + (accent ? 0.004 : 0.012));
+
+  voices.set(id, { osc, filter, shaper, gain, lfo, lfoGain, voiceIndex });
+}
+
+function synthNoteUpdate(id, x, y, speed) {
+  if (!actx || muted) return;
+  const v = voices.get(id);
+  if (!v) return;
+  const now = actx.currentTime;
+  const freq = noteFor(x, y, v.voiceIndex);
+  safeSetTarget(v.osc.frequency, freq, now, 0.03);
+
+  const cutoff = cutoffFor(x);
+  const sp = Number.isFinite(speed) ? Math.max(0, Math.min(1, speed)) : 0;
+  safeSetTarget(v.filter.frequency, cutoff, now, 0.015);
+  safeSetTarget(v.filter.Q, 8 + sp * 20, now, 0.05);
+
+  safeSetTarget(v.lfo.frequency, 1.5 + sp * 14, now, 0.05);
+  safeSetTarget(v.lfoGain.gain, 200 + sp * 1400, now, 0.05);
+  v.shaper.curve = makeDistortionCurve(1.8 + sp * 4.0);
+}
+
+function synthNoteOff(id) {
+  const v = voices.get(id);
+  if (!v || !actx) return;
+  const now = actx.currentTime;
+  v.gain.gain.cancelScheduledValues(now);
+  v.gain.gain.setTargetAtTime(0.0001, now, 0.09);
+  v.lfo.stop(now + 0.5);
+  v.osc.stop(now + 0.5);
+  voices.delete(id);
+}
+
+document.getElementById('muteBtn').addEventListener('click', () => {
+  muted = !muted;
+  document.getElementById('muteBtn').textContent = muted ? '\u{1F507}' : '\u{1F50A}';
+  if (masterGain) masterGain.gain.setTargetAtTime(muted ? 0 : 0.85, actx.currentTime, 0.05);
+});
+
+/* ---------------- uniforms setup ---------------- */
+
+function getUniforms(prog, names) {
+  const u = {};
+  names.forEach(n => { u[n] = gl.getUniformLocation(prog, n); });
+  return u;
+}
+
+const mainU = getUniforms(mainProg, [
+  'u_bgA', 'u_bgB', 'u_prev', 'u_bgMix', 'u_time', 'u_aspect',
+  'u_zoneCount', 'u_zonePos', 'u_zoneRadius', 'u_zoneHeat'
+]);
+const blitU = getUniforms(blitProg, ['u_tex', 'u_grain', 'u_time']);
+
+/* ---------------- main loop ---------------- */
+
+let bgIndexA = 0, bgIndexB = 1, bgMix = 0;
+let lastSwitch = performance.now();
+let lastFrameTime = performance.now();
+
+function draw() {
+  requestAnimationFrame(draw);
+  if (loadedCount < BG_COUNT) return;
+
+  const now = performance.now();
+  const time = now * 0.001;
+  const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
+  lastFrameTime = now;
+  const idleFor = (now - lastMoveTime) / 1000;
+
+  // zone heat: grows while held (faster with drag speed and with more
+  // simultaneous fingers), cools down once released
+  const activeCount = zones.reduce((n, z) => n + (z.active ? 1 : 0), 0);
+  zones.forEach(z => {
+    if (z.active) {
+      const p = pointers.get(z.id);
+      const speed = p ? p.speed : 0;
+      const gainRate = (0.32 + speed * 2.4) * (1 + 0.35 * Math.max(0, activeCount - 1));
+      z.heat = Math.min(1, z.heat + dt * gainRate);
+    } else {
+      z.heat = Math.max(0, z.heat - dt * 0.85);
+    }
+  });
+  zones = zones.filter(z => z.active || z.heat > 0.001);
+
+  const maxHeat = zones.reduce((m, z) => Math.max(m, z.heat), 0);
+
+  // slow ambient drift of the background pair when idle, snap towards touch-chosen index when active
+  if (pointers.size > 0) {
+    let avgX = 0;
+    pointers.forEach(p => { avgX += p.x; });
+    avgX /= pointers.size;
+    const targetIdx = Math.floor(avgX * BG_COUNT) % BG_COUNT;
+    if (targetIdx !== bgIndexB && now - lastSwitch > 260) {
+      bgIndexA = bgIndexB;
+      bgIndexB = targetIdx;
+      bgMix = 0;
+      lastSwitch = now;
+    }
+  } else if (idleFor > 2.5 && now - lastSwitch > 7000) {
+    bgIndexA = bgIndexB;
+    bgIndexB = (bgIndexB + 1) % BG_COUNT;
+    bgMix = 0;
+    lastSwitch = now;
+  }
+  const mixSpeed = pointers.size > 0 ? 0.06 : 0.008;
+  bgMix = Math.min(1, bgMix + mixSpeed);
+
+  // zone uniforms: strongest MAX_ZONES by heat
+  const sortedZones = zones.slice().sort((a, b) => b.heat - a.heat).slice(0, MAX_ZONES);
+  const zonePos = new Float32Array(MAX_ZONES * 2);
+  const zoneRadius = new Float32Array(MAX_ZONES);
+  const zoneHeat = new Float32Array(MAX_ZONES);
+  sortedZones.forEach((z, i) => {
+    zonePos[i*2] = z.x; zonePos[i*2+1] = z.y;
+    zoneRadius[i] = 0.07 + 0.36 * z.heat; // little section -> big weird
+    zoneHeat[i] = z.heat;
+  });
+
+  const aspect = canvas.width / Math.max(1, canvas.height);
+
+  // --- pass 1: render effect into ping FBO, reading from pong as previous frame ---
+  const writeIdx = pingIndex;
+  const readIdx = 1 - pingIndex;
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[writeIdx]);
+  gl.viewport(0, 0, fboW, fboH);
+  gl.useProgram(mainProg);
+  bindQuad(mainProg);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, textures[bgIndexA] || fallbackTex);
+  gl.uniform1i(mainU.u_bgA, 0);
+
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, textures[bgIndexB] || fallbackTex);
+  gl.uniform1i(mainU.u_bgB, 1);
+
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, fboTex[readIdx]);
+  gl.uniform1i(mainU.u_prev, 2);
+
+  gl.uniform1f(mainU.u_bgMix, bgMix);
+  gl.uniform1f(mainU.u_time, time);
+  gl.uniform1f(mainU.u_aspect, aspect);
+  gl.uniform1i(mainU.u_zoneCount, sortedZones.length);
+  gl.uniform2fv(mainU.u_zonePos, zonePos);
+  gl.uniform1fv(mainU.u_zoneRadius, zoneRadius);
+  gl.uniform1fv(mainU.u_zoneHeat, zoneHeat);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  // --- pass 2: blit ping FBO to screen with subtle grain ---
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(blitProg);
+  bindQuad(blitProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, fboTex[writeIdx]);
+  gl.uniform1i(blitU.u_tex, 0);
+  gl.uniform1f(blitU.u_grain, 0.012 + maxHeat * 0.02);
+  gl.uniform1f(blitU.u_time, time);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  pingIndex = readIdx;
+}
+
+/* ---------------- boot ---------------- */
+
+resize();
+fallbackTex = makeFallbackTexture();
+
+Promise.all(BG_DATA.map(loadTexture)).then((texs) => {
+  texs.forEach(t => textures.push(t));
+  if (failedCount >= BG_COUNT) {
+    showFatal('None of the background art could load. Check bg-data.js is intact next to index.html.');
+    return;
+  }
+  if (failedCount > 0) {
+    console.warn('[trip-engine]', failedCount, 'of', BG_COUNT, 'backgrounds failed to load; continuing with the rest.');
+  }
+  document.getElementById('loading').style.opacity = '0';
+  setTimeout(() => { document.getElementById('loading').style.display = 'none'; }, 500);
+  requestAnimationFrame(draw);
+});
+
+})();
+</script>
+</body>
+</html>
