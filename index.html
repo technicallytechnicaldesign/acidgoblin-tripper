@@ -452,8 +452,9 @@ function onPointerDown(e) {
   if (existing) {
     existing.x = x; existing.y = y; existing.active = true;
     existing.heat = Math.max(existing.heat, 0.12);
+    existing.heldFor = 0;
   } else {
-    zones.push({ id: e.pointerId, x, y, heat: 0.12, active: true });
+    zones.push({ id: e.pointerId, x, y, heat: 0.12, active: true, heldFor: 0 });
   }
   synthNoteOn(e.pointerId, x, y);
   document.getElementById('hint').classList.add('hidden');
@@ -677,7 +678,11 @@ function draw() {
   lastFrameTime = now;
 
   // zone heat: grows while held (faster with drag speed and with more
-  // simultaneous fingers), cools down once released
+  // simultaneous fingers), cools down once released. heldFor tracks plain
+  // continuous hold time (seconds), separate from heat, so a long single
+  // hold can slowly take over the whole screen past OVERTAKE_START.
+  const OVERTAKE_START = 5.0;
+  const OVERTAKE_FULL = 12.0;
   const activeCount = zones.reduce((n, z) => n + (z.active ? 1 : 0), 0);
   zones.forEach(z => {
     if (z.active) {
@@ -685,8 +690,10 @@ function draw() {
       const speed = p ? p.speed : 0;
       const gainRate = (0.32 + speed * 2.4) * (1 + 0.35 * Math.max(0, activeCount - 1));
       z.heat = Math.min(1, z.heat + dt * gainRate);
+      z.heldFor = (z.heldFor || 0) + dt;
     } else {
       z.heat = Math.max(0, z.heat - dt * 0.85);
+      z.heldFor = Math.max(0, (z.heldFor || 0) - dt * 2.0);
     }
   });
   zones = zones.filter(z => z.active || z.heat > 0.001);
@@ -704,7 +711,9 @@ function draw() {
   const zoneHeat = new Float32Array(MAX_ZONES);
   sortedZones.forEach((z, i) => {
     zonePos[i*2] = z.x; zonePos[i*2+1] = z.y;
-    zoneRadius[i] = 0.07 + 0.36 * z.heat; // little section -> big weird
+    const t = Math.max(0, Math.min(1, ((z.heldFor || 0) - OVERTAKE_START) / (OVERTAKE_FULL - OVERTAKE_START)));
+    const overtake = t * t * (3 - 2 * t); // smoothstep
+    zoneRadius[i] = 0.07 + 0.36 * z.heat + overtake * 1.6; // little section -> big weird -> whole screen
     zoneHeat[i] = z.heat;
   });
 
