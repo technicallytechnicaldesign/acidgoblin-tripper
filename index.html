@@ -242,6 +242,7 @@ uniform float u_zoneHeld[${MAX_ZONES}];  // seconds continuously held
 uniform vec2 u_commitPos;
 uniform float u_commitRadius;
 uniform float u_commitAmt;
+uniform float u_commitProgress; // 0..1 raw time through the commit wipe
 
 vec3 hueRotate(vec3 c, float a) {
   float u = cos(a), w = sin(a);
@@ -422,9 +423,23 @@ void main() {
     float ctear = sin(cang * 9.0 + u_time * 1.6) * 0.05 + sin(cang * 23.0 - u_time * 2.3) * 0.025;
     float cd = length(crel) - u_commitRadius - ctear;
     float cMask = smoothstep(0.06, -0.06, cd) * u_commitAmt;
-    vec2 cw = vec2(sin(u_time * 0.7 + uv0.y * 9.0), cos(u_time * 0.55 + uv0.x * 9.0)) * 0.018 * u_commitAmt;
+
+    // wobble/hue/blur all peak mid-wipe and settle back to *zero* by the
+    // end (not just fade out with the mask) -- so the revealed image is
+    // already sharp and true-colour before this layer disappears, instead
+    // of snapping into focus the instant it does
+    float distortAmt = sin(clamp(u_commitProgress, 0.0, 1.0) * 3.14159265);
+    vec2 cw = vec2(sin(u_time * 0.7 + uv0.y * 9.0), cos(u_time * 0.55 + uv0.x * 9.0)) * 0.018 * distortAmt;
+    float blurAmt = distortAmt * 0.016;
+
     vec3 throughCol = texture2D(u_bgB, coverUV(uv0 + cw)).rgb;
-    throughCol = hueRotate(throughCol, sin(u_time * 0.5 + cang * 1.6) * 0.4 * u_commitAmt);
+    throughCol += texture2D(u_bgB, coverUV(uv0 + cw + vec2(blurAmt, 0.0))).rgb;
+    throughCol += texture2D(u_bgB, coverUV(uv0 + cw - vec2(blurAmt, 0.0))).rgb;
+    throughCol += texture2D(u_bgB, coverUV(uv0 + cw + vec2(0.0, blurAmt))).rgb;
+    throughCol += texture2D(u_bgB, coverUV(uv0 + cw - vec2(0.0, blurAmt))).rgb;
+    throughCol *= 0.2;
+    throughCol = hueRotate(throughCol, sin(u_time * 0.5 + cang * 1.6) * 0.4 * distortAmt);
+
     col = mix(col, throughCol, cMask);
   }
 
@@ -903,7 +918,7 @@ function getUniforms(prog, names) {
 const mainU = getUniforms(mainProg, [
   'u_bgA', 'u_bgB', 'u_bgNext', 'u_prev', 'u_bgMix', 'u_time', 'u_aspect', 'u_imgAspect',
   'u_zoneCount', 'u_zonePos', 'u_zoneRadius', 'u_zoneHeat', 'u_zoneHeld',
-  'u_commitPos', 'u_commitRadius', 'u_commitAmt'
+  'u_commitPos', 'u_commitRadius', 'u_commitAmt', 'u_commitProgress'
 ]);
 const blitU = getUniforms(blitProg, ['u_tex', 'u_grain', 'u_time']);
 
@@ -1020,18 +1035,20 @@ function draw() {
 
   // step-through wipe: grows from the release point to swallow the whole
   // screen, then hands off to the (by-then fully crossfaded) background
-  let commitAmt = 0, commitX = 0.5, commitY = 0.5, commitRadius = 0;
+  let commitAmt = 0, commitX = 0.5, commitY = 0.5, commitRadius = 0, commitProgress = 0;
   if (portalCommit) {
     const ct = Math.min(1, (now - portalCommit.startTime) / COMMIT_DURATION);
     const eased = ct * ct * (3 - 2 * ct);
     commitRadius = 0.2 + eased * 1.6;
     commitAmt = Math.min(1, ct / 0.15) * (1 - Math.min(1, Math.max(0, (ct - 0.7) / 0.3)));
+    commitProgress = ct;
     commitX = portalCommit.x; commitY = portalCommit.y;
     if (ct >= 1) portalCommit = null;
   }
   gl.uniform2f(mainU.u_commitPos, commitX, commitY);
   gl.uniform1f(mainU.u_commitRadius, commitRadius);
   gl.uniform1f(mainU.u_commitAmt, commitAmt);
+  gl.uniform1f(mainU.u_commitProgress, commitProgress);
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
