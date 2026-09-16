@@ -27,11 +27,16 @@
   }
   #hint.hidden { opacity: 0; }
 
-  #title {
-    position: fixed; top: 10px; left: 0; right: 0; text-align: center;
-    padding: 0 10px;
-    line-height: 1.2;
+  #titleWrap {
+    position: fixed; top: 0; left: 0; right: 0;
     pointer-events: none;
+    transition: opacity 1.8s ease;
+  }
+  #titleWrap.idle { opacity: 0.12; }
+  #title {
+    text-align: center;
+    padding: 10px 10px 0;
+    line-height: 1.2;
     mix-blend-mode: screen;
     filter: drop-shadow(0 0 10px rgba(255,0,220,0.5)) drop-shadow(0 0 18px rgba(0,230,255,0.35));
     animation: pulseTitle 4s ease-in-out infinite;
@@ -64,15 +69,25 @@
   }
 
   #muteBtn, #bgBtn {
-    position: fixed; top: 16px; z-index: 10;
-    width: 40px; height: 40px; border-radius: 50%;
-    border: 1px solid rgba(255,255,255,0.4);
-    background: rgba(0,0,0,0.35); color: #fff;
-    font-size: 16px; display: flex; align-items: center; justify-content: center;
+    position: fixed; top: 14px; z-index: 10;
+    width: 46px; height: 46px; border-radius: 50%;
+    border: none; background: transparent; padding: 0;
+    display: flex; align-items: center; justify-content: center;
     cursor: pointer;
+    mix-blend-mode: screen;
+    filter: drop-shadow(0 0 6px rgba(255,0,220,0.5)) drop-shadow(0 0 10px rgba(0,230,255,0.35));
+    transition: opacity 1.8s ease, transform 0.2s ease;
   }
-  #muteBtn { right: 16px; }
-  #bgBtn { right: 64px; }
+  #muteBtn svg, #bgBtn svg { width: 26px; height: 26px; display: block; }
+  #muteBtn { right: 10px; }
+  #bgBtn { right: 58px; }
+  #muteBtn:active, #bgBtn:active { transform: scale(0.88); }
+  #muteBtn.idle, #bgBtn.idle { opacity: 0.16; }
+  #muteBtn .eyeSlash { transition: stroke-dashoffset 0.25s ease; }
+  #muteBtn.muted .eyeSlash { stroke-dashoffset: 0; }
+  #muteBtn.muted .eyePupil { opacity: 0.25; }
+  #bgBtn svg { transition: transform 0.6s ease; }
+  #bgBtn:active svg { transform: rotate(35deg); }
 
   #loading {
     position: fixed; inset: 0; background: #05010a;
@@ -106,10 +121,41 @@
 </div>
 
 <canvas id="gl"></canvas>
-<div id="title" aria-label="Acid Goblin, Trip Engine">ACID GOBLIN &middot; TRIP ENGINE</div>
+<div id="titleWrap">
+  <div id="title" aria-label="Acid Goblin, Trip Engine">ACID GOBLIN &middot; TRIP ENGINE</div>
+</div>
 <div id="hint">touch to spark a little heat. hold and drag to melt it. more fingers, more madness.</div>
-<button id="bgBtn" aria-label="change background">&#127752;</button>
-<button id="muteBtn" aria-label="toggle sound">&#128266;</button>
+
+<button id="bgBtn" aria-label="change background">
+  <svg viewBox="0 0 36 36">
+    <defs>
+      <linearGradient id="bgIconGrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#ff2fd0"/>
+        <stop offset="50%" stop-color="#ffd23f"/>
+        <stop offset="100%" stop-color="#2fe8ff"/>
+      </linearGradient>
+    </defs>
+    <path d="M18 18 m 0 -2.6 a 2.6 2.6 0 1 1 -2.6 2.6 a 6 6 0 1 1 6 -6 a 10.2 10.2 0 1 1 -10.2 10.2 a 14.5 14.5 0 1 1 14.5 -14.5"
+          fill="none" stroke="url(#bgIconGrad)" stroke-width="2.2" stroke-linecap="round"/>
+  </svg>
+</button>
+<button id="muteBtn" aria-label="toggle sound">
+  <svg viewBox="0 0 36 36">
+    <defs>
+      <linearGradient id="muteIconGrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#ff2fd0"/>
+        <stop offset="50%" stop-color="#ffd23f"/>
+        <stop offset="100%" stop-color="#2fe8ff"/>
+      </linearGradient>
+    </defs>
+    <path class="eyeLid" d="M3 18 C 9 7, 27 7, 33 18 C 27 29, 9 29, 3 18 Z"
+          fill="none" stroke="url(#muteIconGrad)" stroke-width="2.2"/>
+    <circle class="eyePupil" cx="18" cy="18" r="5" fill="url(#muteIconGrad)"/>
+    <line class="eyeSlash" x1="4" y1="4" x2="32" y2="32"
+          stroke="url(#muteIconGrad)" stroke-width="2.4" stroke-linecap="round"
+          stroke-dasharray="40" stroke-dashoffset="40"/>
+  </svg>
+</button>
 
 <script>
 (function () {
@@ -597,6 +643,25 @@ canvas.addEventListener('pointercancel', onPointerUp, { passive: false });
 canvas.addEventListener('pointerleave', onPointerUp, { passive: false });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+/* ---------------- title/buttons fade to near-nothing when idle ---------------- */
+
+(function () {
+  const IDLE_AFTER = 4200; // ms of no interaction before fading
+  const idleEls = [document.getElementById('titleWrap'), document.getElementById('muteBtn'), document.getElementById('bgBtn')];
+  let lastInteract = performance.now();
+  function wake() {
+    lastInteract = performance.now();
+    idleEls.forEach(el => el.classList.remove('idle'));
+  }
+  window.addEventListener('pointerdown', wake, { passive: true });
+  window.addEventListener('pointermove', wake, { passive: true });
+  setInterval(() => {
+    if (performance.now() - lastInteract > IDLE_AFTER) {
+      idleEls.forEach(el => el.classList.add('idle'));
+    }
+  }, 400);
+})();
+
 /* ---------------- audio: per-finger TB-303-ish acid synth ---------------- */
 
 let actx = null;
@@ -790,7 +855,7 @@ function synthNoteOff(id) {
 
 document.getElementById('muteBtn').addEventListener('click', () => {
   muted = !muted;
-  document.getElementById('muteBtn').textContent = muted ? '\u{1F507}' : '\u{1F50A}';
+  document.getElementById('muteBtn').classList.toggle('muted', muted);
   if (masterGain) masterGain.gain.setTargetAtTime(muted ? 0 : 0.85, actx.currentTime, 0.05);
 });
 
