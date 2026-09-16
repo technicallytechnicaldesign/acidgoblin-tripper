@@ -27,17 +27,11 @@
   }
   #hint.hidden { opacity: 0; }
 
-  #titleWrap {
-    position: fixed; top: 0; left: 0; right: 0;
-    pointer-events: none;
-    transition: opacity 1.8s ease;
-  }
-  #titleWrap.idle { opacity: 0.12; }
-  #title {
+  #splashTitle {
     text-align: center;
-    padding: 10px 10px 0;
+    padding: 0 10px;
     line-height: 1.2;
-    mix-blend-mode: screen;
+    margin-bottom: 8px;
     filter: drop-shadow(0 0 10px rgba(255,0,220,0.5)) drop-shadow(0 0 18px rgba(0,230,255,0.35));
     animation: pulseTitle 4s ease-in-out infinite;
   }
@@ -115,15 +109,13 @@
 <body>
 
 <div id="loading">
+  <div id="splashTitle" aria-label="Acid Goblin, Trip Engine">ACID GOBLIN &middot; TRIP ENGINE</div>
   <div class="txt">summoning the goblin</div>
   <div class="bar"><div class="fill" id="loadFill"></div></div>
   <div class="err" id="loadErr"></div>
 </div>
 
 <canvas id="gl"></canvas>
-<div id="titleWrap">
-  <div id="title" aria-label="Acid Goblin, Trip Engine">ACID GOBLIN &middot; TRIP ENGINE</div>
-</div>
 <div id="hint">touch to spark a little heat. hold and drag to melt it. more fingers, more madness.</div>
 
 <button id="bgBtn" aria-label="change background">
@@ -159,7 +151,7 @@
 
 <script>
 (function () {
-  var el = document.getElementById('title');
+  var el = document.getElementById('splashTitle');
   var text = el.textContent;
   el.textContent = '';
   for (var i = 0; i < text.length; i++) {
@@ -403,7 +395,14 @@ void main() {
     float pr = mix(0.0, 0.2, portalAmt) + tear * portalAmt;
     float pd = length(prel) - pr;
     float portalMask = smoothstep(0.035, -0.035, pd) * portalAmt;
-    vec3 nextCol = texture2D(u_bgNext, coverUV(uv0)).rgb;
+
+    // the peek shouldn't read as a perfectly still photo -- a slow wobble
+    // and a gentle hue drift specific to the portal, distinct from the
+    // idle heat-haze so it feels like its own small pocket of weather
+    vec2 pw = vec2(sin(u_time * 0.6 + uv0.y * 8.0), cos(u_time * 0.5 + uv0.x * 8.0)) * 0.012;
+    vec3 nextCol = texture2D(u_bgNext, coverUV(uv0 + pw)).rgb;
+    nextCol = hueRotate(nextCol, sin(u_time * 0.4 + pang * 1.3) * 0.22);
+
     col = mix(col, nextCol, portalMask);
   }
 
@@ -643,11 +642,11 @@ canvas.addEventListener('pointercancel', onPointerUp, { passive: false });
 canvas.addEventListener('pointerleave', onPointerUp, { passive: false });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-/* ---------------- title/buttons fade to near-nothing when idle ---------------- */
+/* ---------------- buttons fade to near-nothing when idle ---------------- */
 
 (function () {
   const IDLE_AFTER = 4200; // ms of no interaction before fading
-  const idleEls = [document.getElementById('titleWrap'), document.getElementById('muteBtn'), document.getElementById('bgBtn')];
+  const idleEls = [document.getElementById('muteBtn'), document.getElementById('bgBtn')];
   let lastInteract = performance.now();
   function wake() {
     lastInteract = performance.now();
@@ -923,9 +922,11 @@ function draw() {
 
   const maxHeat = zones.reduce((m, z) => Math.max(m, z.heat), 0);
 
-  // background only changes when the button is pressed (changeBackground());
-  // this just animates the crossfade once that happens
-  bgMix = Math.min(1, bgMix + 0.035);
+  // background only changes when triggered (button, or stepping through a
+  // portal); this just animates the crossfade once that happens. Slow
+  // enough to read as a proper dissolve rather than a snap cut -- the
+  // portal-commit case especially looked abrupt at the old faster rate.
+  bgMix = Math.min(1, bgMix + 0.01);
 
   // zone uniforms: strongest MAX_ZONES by heat
   const sortedZones = zones.slice().sort((a, b) => b.heat - a.heat).slice(0, MAX_ZONES);
