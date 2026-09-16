@@ -238,6 +238,7 @@ uniform vec2 u_zonePos[${MAX_ZONES}];    // normalized 0..1, y-up
 uniform float u_zoneRadius[${MAX_ZONES}];
 uniform float u_zoneHeat[${MAX_ZONES}];  // 0..1, how "cooked" this zone is
 uniform float u_zoneHeld[${MAX_ZONES}];  // seconds continuously held
+uniform float u_zoneCommitted[${MAX_ZONES}]; // 1 once this zone has stepped through a portal
 
 uniform vec2 u_commitPos;
 uniform float u_commitRadius;
@@ -311,6 +312,7 @@ void main() {
   float bestRadius = 0.1;
   float bestHeatVal = 0.0;
   float bestHeld = 0.0;
+  float bestCommitted = 0.0;
   for (int i = 0; i < ${MAX_ZONES}; i++) {
     if (i >= u_zoneCount) break;
     vec2 zp = u_zonePos[i];
@@ -319,7 +321,7 @@ void main() {
     float d = length(aspectDelta(uv0, zp));
     float m = smoothstep(zr, 0.0, d) * zh;
     w = 1.0 - (1.0 - w) * (1.0 - m);
-    if (m > bestMask) { bestMask = m; bestPos = zp; bestRadius = zr; bestHeatVal = zh; bestHeld = u_zoneHeld[i]; }
+    if (m > bestMask) { bestMask = m; bestPos = zp; bestRadius = zr; bestHeatVal = zh; bestHeld = u_zoneHeld[i]; bestCommitted = u_zoneCommitted[i]; }
   }
   w = clamp(w, 0.0, 1.0);
 
@@ -392,7 +394,7 @@ void main() {
   // right there showing the next background underneath, growing until
   // ~9s. Experimental -- drawn on top of everything else so it reads
   // clearly as a window rather than blending into the melt around it.
-  float portalAmt = smoothstep(5.0, 9.0, bestHeld);
+  float portalAmt = smoothstep(5.0, 9.0, bestHeld) * (1.0 - bestCommitted);
   if (portalAmt > 0.001) {
     vec2 prel = aspectDelta(uv0, bestPos);
     float pang = atan(prel.y, prel.x);
@@ -676,10 +678,12 @@ function onPointerUp(e) {
     if ((z.heldFor || 0) > PORTAL_COMMIT) {
       portalCommit = { x: z.x, y: z.y, startTime: performance.now() };
       changeBackground();
-      // the zone's own local melt/portal-peek should hand off cleanly to
-      // the commit wipe above, not keep drawing on top of it
-      z.heat = 0;
-      z.heldFor = 0;
+      // only suppress the old live peek (it would drift onto the wrong
+      // image once bgIndexB moves -- see the shader's portalAmt); the
+      // kaleidoscope/melt itself keeps decaying at its normal slow rate
+      // instead of snapping off, so it doesn't disappear the instant you
+      // let go, it fades out alongside the commit wipe.
+      z.committed = true;
     }
     z.active = false;
   }
@@ -920,7 +924,7 @@ function getUniforms(prog, names) {
 
 const mainU = getUniforms(mainProg, [
   'u_bgA', 'u_bgB', 'u_bgNext', 'u_prev', 'u_bgMix', 'u_time', 'u_aspect', 'u_imgAspect',
-  'u_zoneCount', 'u_zonePos', 'u_zoneRadius', 'u_zoneHeat', 'u_zoneHeld',
+  'u_zoneCount', 'u_zonePos', 'u_zoneRadius', 'u_zoneHeat', 'u_zoneHeld', 'u_zoneCommitted',
   'u_commitPos', 'u_commitRadius', 'u_commitAmt', 'u_commitProgress'
 ]);
 const blitU = getUniforms(blitProg, ['u_tex', 'u_grain', 'u_time']);
@@ -987,6 +991,7 @@ function draw() {
   const zoneRadius = new Float32Array(MAX_ZONES);
   const zoneHeat = new Float32Array(MAX_ZONES);
   const zoneHeld = new Float32Array(MAX_ZONES);
+  const zoneCommitted = new Float32Array(MAX_ZONES);
   sortedZones.forEach((z, i) => {
     zonePos[i*2] = z.x; zonePos[i*2+1] = z.y;
     const t = Math.max(0, Math.min(1, ((z.heldFor || 0) - OVERTAKE_START) / (OVERTAKE_FULL - OVERTAKE_START)));
@@ -994,6 +999,7 @@ function draw() {
     zoneRadius[i] = 0.07 + 0.36 * z.heat + overtake * 1.6; // little section -> big weird -> whole screen
     zoneHeat[i] = z.heat;
     zoneHeld[i] = z.heldFor || 0;
+    zoneCommitted[i] = z.committed ? 1 : 0;
   });
 
   const aspect = canvas.width / Math.max(1, canvas.height);
@@ -1035,6 +1041,7 @@ function draw() {
   gl.uniform1fv(mainU.u_zoneRadius, zoneRadius);
   gl.uniform1fv(mainU.u_zoneHeat, zoneHeat);
   gl.uniform1fv(mainU.u_zoneHeld, zoneHeld);
+  gl.uniform1fv(mainU.u_zoneCommitted, zoneCommitted);
 
   // step-through wipe: grows from the release point to swallow the whole
   // screen, then hands off to the (by-then fully crossfaded) background
