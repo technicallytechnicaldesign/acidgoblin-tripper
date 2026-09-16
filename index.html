@@ -6,7 +6,7 @@
 <title>ACID GOBLIN // TRIP ENGINE</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Monoton&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Nabla&display=swap" rel="stylesheet">
 <style>
   :root { color-scheme: dark; }
   html, body {
@@ -28,24 +28,35 @@
   #hint.hidden { opacity: 0; }
 
   #title {
-    position: fixed; top: 14px; left: 0; right: 0; text-align: center;
-    font-family: 'Monoton', cursive;
-    font-size: clamp(20px, 5vw, 34px);
-    letter-spacing: 0.08em;
-    line-height: 1.15;
+    position: fixed; top: 10px; left: 0; right: 0; text-align: center;
+    padding: 0 10px;
+    line-height: 1.2;
+    pointer-events: none;
+    mix-blend-mode: screen;
+    filter: drop-shadow(0 0 10px rgba(255,0,220,0.5)) drop-shadow(0 0 18px rgba(0,230,255,0.35));
+    animation: pulseTitle 4s ease-in-out infinite;
+  }
+  .tchar {
+    display: inline-block;
+    font-family: 'Nabla', cursive;
+    font-variation-settings: 'EDPT' 100, 'EHLT' 24;
+    font-size: clamp(24px, 6.5vw, 44px);
+    margin: 0 0.01em;
     background: linear-gradient(90deg, #ff2fd0, #ffd23f, #2fe8ff, #ff2fd0);
     background-size: 300% auto;
     -webkit-background-clip: text; background-clip: text;
     color: transparent;
-    -webkit-text-stroke: 1px rgba(255,255,255,0.25);
-    filter: drop-shadow(0 0 10px rgba(255,0,220,0.5)) drop-shadow(0 0 18px rgba(0,230,255,0.35));
-    opacity: 0.55;
-    pointer-events: none;
-    animation: pulseTitle 4s ease-in-out infinite, hueTravel 8s linear infinite;
+    -webkit-text-stroke: 0.5px rgba(255,255,255,0.22);
+    animation: waveChar 2.8s ease-in-out infinite, hueTravel 6s linear infinite;
+    animation-delay: var(--d, 0s), var(--d, 0s);
+  }
+  @keyframes waveChar {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-7px) rotate(-3deg); }
   }
   @keyframes pulseTitle {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 0.65; }
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 0.85; }
   }
   @keyframes hueTravel {
     0% { background-position: 0% 50%; }
@@ -95,10 +106,27 @@
 </div>
 
 <canvas id="gl"></canvas>
-<div id="title">ACID GOBLIN &middot; TRIP ENGINE</div>
-<div id="hint">touch the screen. hold and drag to melt it. more fingers, more madness.</div>
+<div id="title" aria-label="Acid Goblin, Trip Engine">ACID GOBLIN &middot; TRIP ENGINE</div>
+<div id="hint">touch to spark a little heat. hold and drag to melt it. more fingers, more madness.</div>
 <button id="bgBtn" aria-label="change background">&#127752;</button>
 <button id="muteBtn" aria-label="toggle sound">&#128266;</button>
+
+<script>
+(function () {
+  var el = document.getElementById('title');
+  var text = el.textContent;
+  el.textContent = '';
+  for (var i = 0; i < text.length; i++) {
+    var ch = text[i];
+    if (ch === ' ') { el.appendChild(document.createTextNode(' ')); continue; }
+    var span = document.createElement('span');
+    span.className = 'tchar';
+    span.textContent = ch;
+    span.style.setProperty('--d', (i * 0.09) + 's');
+    el.appendChild(span);
+  }
+})();
+</script>
 
 <script src="bg-data.js"></script>
 <script>
@@ -629,10 +657,14 @@ function synthNoteOff(id) {
   const v = voices.get(id);
   if (!v || !actx) return;
   const now = actx.currentTime;
+  // matches the visual heat shimmer's cooldown (see draw()) so a touch's
+  // tone melts away over the same few seconds as its zone, whether it was
+  // a light tap or a long hold
+  const tau = 1.3;
   v.gain.gain.cancelScheduledValues(now);
-  v.gain.gain.setTargetAtTime(0.0001, now, 0.09);
-  v.lfo.stop(now + 0.5);
-  v.osc.stop(now + 0.5);
+  v.gain.gain.setTargetAtTime(0.0001, now, tau);
+  v.lfo.stop(now + 4.5);
+  v.osc.stop(now + 4.5);
   voices.delete(id);
 }
 
@@ -692,7 +724,11 @@ function draw() {
       z.heat = Math.min(1, z.heat + dt * gainRate);
       z.heldFor = (z.heldFor || 0) + dt;
     } else {
-      z.heat = Math.max(0, z.heat - dt * 0.85);
+      // a quick touch lingers as a small "heat shimmer" for a few seconds
+      // rather than snapping off instantly -- exponential decay so this
+      // holds true whether the touch was a light tap or a long hold.
+      z.heat *= Math.exp(-dt / 1.3);
+      if (z.heat < 0.003) z.heat = 0;
       z.heldFor = Math.max(0, (z.heldFor || 0) - dt * 2.0);
     }
   });
