@@ -188,6 +188,7 @@ varying vec2 v_uv;
 
 uniform sampler2D u_bgA;
 uniform sampler2D u_bgB;
+uniform sampler2D u_bgNext; // the upcoming background, for the long-hold portal
 uniform sampler2D u_prev;
 uniform float u_bgMix;
 uniform float u_time;
@@ -198,6 +199,7 @@ uniform int u_zoneCount;
 uniform vec2 u_zonePos[${MAX_ZONES}];    // normalized 0..1, y-up
 uniform float u_zoneRadius[${MAX_ZONES}];
 uniform float u_zoneHeat[${MAX_ZONES}];  // 0..1, how "cooked" this zone is
+uniform float u_zoneHeld[${MAX_ZONES}];  // seconds continuously held
 
 vec3 hueRotate(vec3 c, float a) {
   float u = cos(a), w = sin(a);
@@ -228,17 +230,29 @@ vec2 coverUV(vec2 uv) {
   return (uv - 0.5) * span + 0.5;
 }
 
+// a smooth, low-frequency field so different patches of the screen drift
+// at different speeds instead of one uniform rate everywhere -- some
+// pockets sit slow and lazy, others wobble faster, and it shifts which is
+// which very slowly over time so it's never a fixed map.
+float ambientRate(vec2 uv, float t) {
+  float n = sin(uv.x * 2.6 + uv.y * 1.7 + t * 0.02) * 0.5
+          + cos(uv.x * 1.1 - uv.y * 2.9 - t * 0.015) * 0.5;
+  return mix(0.35, 2.0, n * 0.5 + 0.5);
+}
+
 // always-on heat-haze over the idle (untouched) artwork: a big slow wave
 // layered with a smaller faster ripple (real heat-shimmer has both), plus
 // a shared scalar so color can visibly pulse in sync with the same wave
 // as it passes over -- not just the UV displacement.
 vec2 ambientWobble(vec2 uv, float t) {
-  float wx = sin(t * 0.35 + uv.y * 4.0) + 0.5 * sin(t * 0.9 + uv.y * 11.0);
-  float wy = cos(t * 0.27 + uv.x * 4.0) + 0.5 * cos(t * 0.8 + uv.x * 11.0);
+  float rate = ambientRate(uv, t);
+  float wx = sin(t * 0.35 * rate + uv.y * 4.0) + 0.5 * sin(t * 0.9 * rate + uv.y * 11.0);
+  float wy = cos(t * 0.27 * rate + uv.x * 4.0) + 0.5 * cos(t * 0.8 * rate + uv.x * 11.0);
   return uv + vec2(wx, wy) * 0.011;
 }
 float ambientWave(vec2 uv, float t) {
-  return sin(t * 0.35 + uv.y * 4.0) * cos(t * 0.27 + uv.x * 4.0);
+  float rate = ambientRate(uv, t);
+  return sin(t * 0.35 * rate + uv.y * 4.0) * cos(t * 0.27 * rate + uv.x * 4.0);
 }
 
 void main() {
@@ -253,6 +267,7 @@ void main() {
   vec2 bestPos = vec2(0.5);
   float bestRadius = 0.1;
   float bestHeatVal = 0.0;
+  float bestHeld = 0.0;
   for (int i = 0; i < ${MAX_ZONES}; i++) {
     if (i >= u_zoneCount) break;
     vec2 zp = u_zonePos[i];
@@ -261,7 +276,7 @@ void main() {
     float d = length(aspectDelta(uv0, zp));
     float m = smoothstep(zr, 0.0, d) * zh;
     w = 1.0 - (1.0 - w) * (1.0 - m);
-    if (m > bestMask) { bestMask = m; bestPos = zp; bestRadius = zr; bestHeatVal = zh; }
+    if (m > bestMask) { bestMask = m; bestPos = zp; bestRadius = zr; bestHeatVal = zh; bestHeld = u_zoneHeld[i]; }
   }
   w = clamp(w, 0.0, 1.0);
 
@@ -329,6 +344,22 @@ void main() {
   vec3 prevCol = texture2D(u_prev, v_uv).rgb;
   float fb = w * mix(0.0, 0.65, localHeat);
   col = mix(col, prevCol, fb);
+
+  // long-hold "portal": past ~5s held in one spot, a torn window opens
+  // right there showing the next background underneath, growing until
+  // ~9s. Experimental -- drawn on top of everything else so it reads
+  // clearly as a window rather than blending into the melt around it.
+  float portalAmt = smoothstep(5.0, 9.0, bestHeld);
+  if (portalAmt > 0.001) {
+    vec2 prel = aspectDelta(uv0, bestPos);
+    float pang = atan(prel.y, prel.x);
+    float tear = sin(pang * 9.0 + u_time * 1.6) * 0.028 + sin(pang * 23.0 - u_time * 2.3) * 0.014;
+    float pr = mix(0.0, 0.2, portalAmt) + tear * portalAmt;
+    float pd = length(prel) - pr;
+    float portalMask = smoothstep(0.035, -0.035, pd) * portalAmt;
+    vec3 nextCol = texture2D(u_bgNext, coverUV(uv0)).rgb;
+    col = mix(col, nextCol, portalMask);
+  }
 
   // gentle vignette, always present, not part of the "weird" system
   float dist0 = length(v_uv - 0.5);
@@ -543,9 +574,18 @@ function onPointerMove(e) {
   synthNoteUpdate(e.pointerId, x, y, p.speed);
   e.preventDefault();
 }
+// how long a hold's portal (see the shader's portalAmt) has to have been
+// open before letting go actually steps through to the next background;
+// matches the shader's portalAmt ramp (smoothstep 5.0 -> 9.0)
+const PORTAL_COMMIT = 7.5;
+
 function onPointerUp(e) {
   pointers.delete(e.pointerId);
-  zones.forEach(z => { if (z.id === e.pointerId) z.active = false; });
+  const z = getZone(e.pointerId);
+  if (z) {
+    if ((z.heldFor || 0) > PORTAL_COMMIT) changeBackground();
+    z.active = false;
+  }
   synthNoteOff(e.pointerId);
   e.preventDefault();
 }
@@ -560,8 +600,15 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 /* ---------------- audio: per-finger TB-303-ish acid synth ---------------- */
 
 let actx = null;
-let masterGain, dryGain, wetGain, delayNode, delayFeedback, delayFilter, muted = false;
+let masterGain, dryGain, wetGain, delayNode, delayFeedback, delayFilter, limiter, muted = false;
 const voices = new Map(); // pointerId -> {osc, filter, shaper, gain, lfo, lfoGain}
+// voices past release aren't in `voices` anymore but their nodes keep
+// sounding until their scheduled stop -- tracked here so repeated tapping
+// can't pile up an unbounded number of overlapping tails (that pileup was
+// the actual cause of the "fighting"/reverb/dropout: too many hot voices
+// hitting the shared delay feedback bus at once with nothing to cap it).
+const releasingVoices = [];
+const MAX_RELEASING = 5;
 
 // acid phrygian-ish scale, 2 octaves, semitone offsets from root
 const SCALE = [0, 1, 3, 5, 7, 8, 10, 12, 13, 15, 17, 19, 20, 22];
@@ -593,22 +640,34 @@ function ensureAudio() {
   dryGain = actx.createGain();
   dryGain.gain.value = 0.75;
   wetGain = actx.createGain();
-  wetGain.gain.value = 0.32;
+  wetGain.gain.value = 0.24;
 
   delayNode = actx.createDelay(1.0);
   delayNode.delayTime.value = 0.21;
   delayFeedback = actx.createGain();
-  delayFeedback.gain.value = 0.38;
+  delayFeedback.gain.value = 0.3;
   delayFilter = actx.createBiquadFilter();
   delayFilter.type = 'lowpass';
   delayFilter.frequency.value = 2200;
 
-  masterGain.connect(dryGain).connect(actx.destination);
+  // a soft limiter on the shared output bus -- with several fingers/taps
+  // stacking voices into the same delay feedback loop, the sum can get
+  // loud enough to clip; this catches that instead of letting it distort
+  // and (on some browsers) choke the audio pipeline entirely.
+  limiter = actx.createDynamicsCompressor();
+  limiter.threshold.value = -10;
+  limiter.knee.value = 12;
+  limiter.ratio.value = 12;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.25;
+  limiter.connect(actx.destination);
+
+  masterGain.connect(dryGain).connect(limiter);
   masterGain.connect(delayNode);
   delayNode.connect(delayFilter);
   delayFilter.connect(delayFeedback);
   delayFeedback.connect(delayNode);
-  delayFilter.connect(wetGain).connect(actx.destination);
+  delayFilter.connect(wetGain).connect(limiter);
 }
 
 function noteFor(x, y, voiceIndex) {
@@ -699,15 +758,34 @@ function synthNoteOff(id) {
   const v = voices.get(id);
   if (!v || !actx) return;
   const now = actx.currentTime;
-  // matches the visual heat shimmer's cooldown (see draw()) so a touch's
-  // tone melts away over the same long fade as its zone, whether it was
-  // a light tap or a long hold
-  const tau = 3.2;
+  // deliberately much shorter than the visual heat shimmer's fade: the
+  // tone only needs a quick, clean release. Letting it linger as long as
+  // the visual (tried that) meant repeated taps stacked many overlapping
+  // tails on the shared delay bus at once -- that pileup, not any one
+  // voice, was what caused the fighting/reverb/dropout.
+  const tau = 0.35;
   v.gain.gain.cancelScheduledValues(now);
   v.gain.gain.setTargetAtTime(0.0001, now, tau);
-  v.lfo.stop(now + 12);
-  v.osc.stop(now + 12);
+  const stopAt = now + 1.6;
+  v.lfo.stop(stopAt);
+  v.osc.stop(stopAt);
   voices.delete(id);
+
+  releasingVoices.push({ gain: v.gain, osc: v.osc, lfo: v.lfo, stopAt });
+  // prune anything already past its natural stop, then hard-cap how many
+  // releasing tails can overlap at once
+  for (let i = releasingVoices.length - 1; i >= 0; i--) {
+    if (releasingVoices[i].stopAt <= now) releasingVoices.splice(i, 1);
+  }
+  while (releasingVoices.length > MAX_RELEASING) {
+    const oldest = releasingVoices.shift();
+    try {
+      oldest.gain.gain.cancelScheduledValues(now);
+      oldest.gain.gain.setTargetAtTime(0.0001, now, 0.04);
+      oldest.lfo.stop(now + 0.15);
+      oldest.osc.stop(now + 0.15);
+    } catch (ex) { /* already stopped */ }
+  }
 }
 
 document.getElementById('muteBtn').addEventListener('click', () => {
@@ -725,8 +803,8 @@ function getUniforms(prog, names) {
 }
 
 const mainU = getUniforms(mainProg, [
-  'u_bgA', 'u_bgB', 'u_prev', 'u_bgMix', 'u_time', 'u_aspect', 'u_imgAspect',
-  'u_zoneCount', 'u_zonePos', 'u_zoneRadius', 'u_zoneHeat'
+  'u_bgA', 'u_bgB', 'u_bgNext', 'u_prev', 'u_bgMix', 'u_time', 'u_aspect', 'u_imgAspect',
+  'u_zoneCount', 'u_zonePos', 'u_zoneRadius', 'u_zoneHeat', 'u_zoneHeld'
 ]);
 const blitU = getUniforms(blitProg, ['u_tex', 'u_grain', 'u_time']);
 
@@ -768,8 +846,10 @@ function draw() {
     } else {
       // a touch lingers as a slow-fading heat shimmer rather than
       // snapping off -- exponential decay so this holds true whether
-      // the touch was a light tap or a long hold.
-      z.heat *= Math.exp(-dt / 3.2);
+      // the touch was a light tap or a long hold. Deliberately much
+      // longer than the paired tone's release (see synthNoteOff) --
+      // the visual can linger without the audio-pileup problem sound has.
+      z.heat *= Math.exp(-dt / 5.5);
       if (z.heat < 0.003) z.heat = 0;
       z.heldFor = Math.max(0, (z.heldFor || 0) - dt * 2.0);
     }
@@ -787,12 +867,14 @@ function draw() {
   const zonePos = new Float32Array(MAX_ZONES * 2);
   const zoneRadius = new Float32Array(MAX_ZONES);
   const zoneHeat = new Float32Array(MAX_ZONES);
+  const zoneHeld = new Float32Array(MAX_ZONES);
   sortedZones.forEach((z, i) => {
     zonePos[i*2] = z.x; zonePos[i*2+1] = z.y;
     const t = Math.max(0, Math.min(1, ((z.heldFor || 0) - OVERTAKE_START) / (OVERTAKE_FULL - OVERTAKE_START)));
     const overtake = t * t * (3 - 2 * t); // smoothstep
     zoneRadius[i] = 0.07 + 0.36 * z.heat + overtake * 1.6; // little section -> big weird -> whole screen
     zoneHeat[i] = z.heat;
+    zoneHeld[i] = z.heldFor || 0;
   });
 
   const aspect = canvas.width / Math.max(1, canvas.height);
@@ -818,6 +900,13 @@ function draw() {
   gl.bindTexture(gl.TEXTURE_2D, fboTex[readIdx]);
   gl.uniform1i(mainU.u_prev, 2);
 
+  // the portal (see main()) always peeks at whatever comes after the
+  // currently-settled background, regardless of any crossfade in progress
+  const peekIndex = (bgIndexB + 1) % BG_COUNT;
+  gl.activeTexture(gl.TEXTURE3);
+  gl.bindTexture(gl.TEXTURE_2D, textures[peekIndex] || fallbackTex);
+  gl.uniform1i(mainU.u_bgNext, 3);
+
   gl.uniform1f(mainU.u_bgMix, bgMix);
   gl.uniform1f(mainU.u_time, time);
   gl.uniform1f(mainU.u_aspect, aspect);
@@ -826,6 +915,7 @@ function draw() {
   gl.uniform2fv(mainU.u_zonePos, zonePos);
   gl.uniform1fv(mainU.u_zoneRadius, zoneRadius);
   gl.uniform1fv(mainU.u_zoneHeat, zoneHeat);
+  gl.uniform1fv(mainU.u_zoneHeld, zoneHeld);
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
