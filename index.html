@@ -192,6 +192,7 @@ uniform sampler2D u_prev;
 uniform float u_bgMix;
 uniform float u_time;
 uniform float u_aspect;
+uniform float u_imgAspect;
 
 uniform int u_zoneCount;
 uniform vec2 u_zonePos[${MAX_ZONES}];    // normalized 0..1, y-up
@@ -212,6 +213,25 @@ vec2 aspectDelta(vec2 a, vec2 b) {
   vec2 d = a - b;
   d.x *= u_aspect;
   return d;
+}
+
+// the art is a fixed 819x1024 (0.8) portrait image; without this, uv 0..1
+// maps straight onto whatever aspect the canvas has and the art stretches
+// (skews) to fit. This crops like CSS background-size: cover instead.
+vec2 coverUV(vec2 uv) {
+  vec2 span = (u_aspect > u_imgAspect)
+    ? vec2(1.0, u_imgAspect / u_aspect)
+    : vec2(u_aspect / u_imgAspect, 1.0);
+  return (uv - 0.5) * span + 0.5;
+}
+
+// tiny always-on heat-haze: a slow, low-amplitude wobble plus a slower
+// hue drift over the idle (untouched) artwork so the page never sits
+// perfectly static, without competing with the touch zones.
+vec2 ambientWobble(vec2 uv, float t) {
+  float wx = sin(t * 0.17 + uv.y * 5.0);
+  float wy = cos(t * 0.13 + uv.x * 5.0);
+  return uv + vec2(wx, wy) * 0.004;
 }
 
 void main() {
@@ -279,13 +299,15 @@ void main() {
   vec2 uvG = weirdUV;
   vec2 uvB = weirdUV - abDir * abAmt;
 
-  float r = mix(texture2D(u_bgA, uvR).r, texture2D(u_bgB, uvR).r, u_bgMix);
-  float g = mix(texture2D(u_bgA, uvG).g, texture2D(u_bgB, uvG).g, u_bgMix);
-  float b = mix(texture2D(u_bgA, uvB).b, texture2D(u_bgB, uvB).b, u_bgMix);
+  float r = mix(texture2D(u_bgA, coverUV(uvR)).r, texture2D(u_bgB, coverUV(uvR)).r, u_bgMix);
+  float g = mix(texture2D(u_bgA, coverUV(uvG)).g, texture2D(u_bgB, coverUV(uvG)).g, u_bgMix);
+  float b = mix(texture2D(u_bgA, coverUV(uvB)).b, texture2D(u_bgB, coverUV(uvB)).b, u_bgMix);
   vec3 weirdCol = vec3(r, g, b);
   weirdCol = hueRotate(weirdCol, localHeat * (u_time * 0.6 + bestMask * 2.0));
 
-  vec3 cleanCol = mix(texture2D(u_bgA, uv0).rgb, texture2D(u_bgB, uv0).rgb, u_bgMix);
+  vec2 idleUV = ambientWobble(uv0, u_time);
+  vec3 cleanCol = mix(texture2D(u_bgA, coverUV(idleUV)).rgb, texture2D(u_bgB, coverUV(idleUV)).rgb, u_bgMix);
+  cleanCol = hueRotate(cleanCol, sin(u_time * 0.05) * 0.05 + sin(u_time * 0.033 + 1.7) * 0.03);
 
   vec3 col = mix(cleanCol, weirdCol, w);
 
@@ -409,6 +431,7 @@ const textures = [];
 let loadedCount = 0;
 let failedCount = 0;
 let fallbackTex = null;
+let imgAspect = 0.8; // real value captured from the first image that loads
 
 function makeFallbackTexture() {
   const tex = gl.createTexture();
@@ -426,6 +449,9 @@ function loadTexture(dataUri) {
     img.onload = () => {
       let tex = null;
       try {
+        if (img.naturalWidth && img.naturalHeight) {
+          imgAspect = img.naturalWidth / img.naturalHeight;
+        }
         tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -477,12 +503,16 @@ function onPointerDown(e) {
   // against duplicate/re-fired down events with no matching up) instead
   // of ever accumulating orphaned zones
   const existing = getZone(e.pointerId);
+  // every touch starts with a real punch (not a slow ramp from near-zero)
+  // so a plain tap is clearly felt in its own spot; holding still builds
+  // further from there exactly as before.
+  const TAP_PUNCH = 0.45;
   if (existing) {
     existing.x = x; existing.y = y; existing.active = true;
-    existing.heat = Math.max(existing.heat, 0.12);
+    existing.heat = Math.max(existing.heat, TAP_PUNCH);
     existing.heldFor = 0;
   } else {
-    zones.push({ id: e.pointerId, x, y, heat: 0.12, active: true, heldFor: 0 });
+    zones.push({ id: e.pointerId, x, y, heat: TAP_PUNCH, active: true, heldFor: 0 });
   }
   synthNoteOn(e.pointerId, x, y);
   document.getElementById('hint').classList.add('hidden');
@@ -660,7 +690,7 @@ function synthNoteOff(id) {
   // matches the visual heat shimmer's cooldown (see draw()) so a touch's
   // tone melts away over the same few seconds as its zone, whether it was
   // a light tap or a long hold
-  const tau = 1.3;
+  const tau = 1.0;
   v.gain.gain.cancelScheduledValues(now);
   v.gain.gain.setTargetAtTime(0.0001, now, tau);
   v.lfo.stop(now + 4.5);
@@ -683,7 +713,7 @@ function getUniforms(prog, names) {
 }
 
 const mainU = getUniforms(mainProg, [
-  'u_bgA', 'u_bgB', 'u_prev', 'u_bgMix', 'u_time', 'u_aspect',
+  'u_bgA', 'u_bgB', 'u_prev', 'u_bgMix', 'u_time', 'u_aspect', 'u_imgAspect',
   'u_zoneCount', 'u_zonePos', 'u_zoneRadius', 'u_zoneHeat'
 ]);
 const blitU = getUniforms(blitProg, ['u_tex', 'u_grain', 'u_time']);
@@ -724,10 +754,10 @@ function draw() {
       z.heat = Math.min(1, z.heat + dt * gainRate);
       z.heldFor = (z.heldFor || 0) + dt;
     } else {
-      // a quick touch lingers as a small "heat shimmer" for a few seconds
-      // rather than snapping off instantly -- exponential decay so this
-      // holds true whether the touch was a light tap or a long hold.
-      z.heat *= Math.exp(-dt / 1.3);
+      // a quick touch lingers as a heat shimmer for a few seconds rather
+      // than snapping off instantly -- exponential decay so this holds
+      // true whether the touch was a light tap or a long hold.
+      z.heat *= Math.exp(-dt / 1.0);
       if (z.heat < 0.003) z.heat = 0;
       z.heldFor = Math.max(0, (z.heldFor || 0) - dt * 2.0);
     }
@@ -779,6 +809,7 @@ function draw() {
   gl.uniform1f(mainU.u_bgMix, bgMix);
   gl.uniform1f(mainU.u_time, time);
   gl.uniform1f(mainU.u_aspect, aspect);
+  gl.uniform1f(mainU.u_imgAspect, imgAspect);
   gl.uniform1i(mainU.u_zoneCount, sortedZones.length);
   gl.uniform2fv(mainU.u_zonePos, zonePos);
   gl.uniform1fv(mainU.u_zoneRadius, zoneRadius);
