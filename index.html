@@ -427,8 +427,11 @@ void main() {
     // wobble/hue/blur all peak mid-wipe and settle back to *zero* by the
     // end (not just fade out with the mask) -- so the revealed image is
     // already sharp and true-colour before this layer disappears, instead
-    // of snapping into focus the instant it does
-    float distortAmt = sin(clamp(u_commitProgress, 0.0, 1.0) * 3.14159265);
+    // of snapping into focus the instant it does. A wide smoothstep hump
+    // (not a sharp sine peak) so the fuzz itself fades in and out slowly
+    // rather than rushing through its middle.
+    float cp = clamp(u_commitProgress, 0.0, 1.0);
+    float distortAmt = smoothstep(0.0, 0.4, cp) * (1.0 - smoothstep(0.6, 1.0, cp));
     vec2 cw = vec2(sin(u_time * 0.7 + uv0.y * 9.0), cos(u_time * 0.55 + uv0.x * 9.0)) * 0.018 * distortAmt;
     float blurAmt = distortAmt * 0.016;
 
@@ -664,7 +667,7 @@ const PORTAL_COMMIT = 7.5;
 // deliberately independent of any zone/heldFor bookkeeping so it can't
 // drift onto a different image than what the maker actually saw open
 let portalCommit = null; // {x, y, startTime}
-const COMMIT_DURATION = 1700; // ms
+const COMMIT_DURATION = 3400; // ms -- slower wash so stepping through lingers
 
 function onPointerUp(e) {
   pointers.delete(e.pointerId);
