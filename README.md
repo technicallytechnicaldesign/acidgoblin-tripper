@@ -1,5 +1,7 @@
 # Acidgoblin Tripper
 
+LIVE: (https://technicallytechnicaldesign.github.io/acidgoblin-tripper/)
+
 A touch-driven acid trip in a browser tab with cursed but cute goblin imagery.
 
 Touch the screen. Hold and drag to melt a little kaleidoscope pocket into being; more fingers, more madness. 
@@ -11,6 +13,8 @@ No build, no server, no install. Just chaos. Download both files and open `index
 
 - `index.html` -- the app
 - `bg-data.js` -- the 10 background images, embedded as base64 (keep it next to `index.html`)
+
+Or just visit the github page if you cba with all that noise. 
 
 Best on a touchscreen, but works with a mouse too if you one of those kinda people.
 
