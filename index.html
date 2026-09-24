@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>ACID GOBLIN // TRIP ENGINE</title>
+<title>ACID GOBLIN // TRIPPA</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nabla&display=swap" rel="stylesheet">
@@ -83,6 +83,16 @@
   #bgBtn svg { transition: transform 0.6s ease; }
   #bgBtn:active svg { transform: rotate(35deg); }
 
+  #trippaGuide { position:fixed; z-index:11; top:10px; left:10px; display:flex; align-items:center; gap:4px; width:min(230px,calc(100vw - 122px)); min-height:65px; padding:4px 7px 4px 1px; border:2px solid #ff2fd0; border-radius:13px 8px 12px 7px; background:rgba(5,1,10,.8); box-shadow:3px 3px 0 #2fe8ff; color:#fff9d7; }
+  #trippaSpeak { flex:none; width:47px; height:62px; padding:0; border:0; background:transparent; cursor:pointer; touch-action:manipulation; }
+  #trippaSpeak img { display:block; width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 0 5px #ff2fd0); animation:trippaNod 12s ease-in-out infinite; }
+  #trippaSpeak:focus-visible { outline:2px solid #ffd23f; border-radius:7px; }
+  #trippaGuide strong { display:block; margin-bottom:2px; color:#ffd23f; font:900 9px/1 'Courier New',monospace; letter-spacing:.06em; }
+  #trippaLine { margin:0; font:700 10px/1.25 'Courier New',monospace; text-shadow:1px 1px 2px #000; }
+  @keyframes trippaNod { 0%,78%,100% { transform:translateY(0); } 87% { transform:translateY(-4px) rotate(-3deg); } 94% { transform:translateY(0) rotate(2deg); } }
+  @media(max-width:360px) { #trippaGuide { width:calc(100vw - 119px); } #trippaSpeak { width:38px; height:57px; } #trippaLine { font-size:9px; } }
+  @media(prefers-reduced-motion:reduce) { #trippaSpeak img { animation:none; } }
+
   #loading {
     position: fixed; inset: 0; background: #05010a;
     display: flex; align-items: center; justify-content: center;
@@ -109,7 +119,7 @@
 <body>
 
 <div id="loading">
-  <div id="splashTitle" aria-label="Acid Goblin, Trip Engine">ACID GOBLIN &middot; TRIP ENGINE</div>
+  <div id="splashTitle" aria-label="Acid Goblin, Trippa">ACID GOBLIN &middot; TRIPPA</div>
   <div class="txt">summoning the goblin</div>
   <div class="bar"><div class="fill" id="loadFill"></div></div>
   <div class="err" id="loadErr"></div>
@@ -117,6 +127,10 @@
 
 <canvas id="gl"></canvas>
 <div id="hint">touch to spark a little heat. hold and drag to melt it. more fingers, more madness.</div>
+<aside id="trippaGuide" aria-label="Trippa, your little goblin guide">
+  <button id="trippaSpeak" type="button" aria-label="Hear another thought from Trippa"><img src="trippa-goblin-v1.webp" alt="" width="240" height="400"></button>
+  <div><strong>TRIPPA SAYS</strong><p id="trippaLine" aria-live="polite" aria-atomic="true">Psst! Touch the world. It wiggles back.</p></div>
+</aside>
 
 <button id="bgBtn" aria-label="change background">
   <svg viewBox="0 0 36 36">
@@ -172,7 +186,7 @@
 "use strict";
 
 /* ---------------------------------------------------------------------
-   ACID GOBLIN: TRIP ENGINE
+   ACID GOBLIN: TRIPPA
 
    Idle: the 10 backgrounds crossfade gently, untouched, just pretty.
    Touch: a localized "madness zone" grows around each finger -- small
@@ -1096,6 +1110,30 @@ Promise.all(BG_DATA.map(loadTexture)).then((texs) => {
   requestAnimationFrame(draw);
 });
 
+})();
+</script>
+<script>
+(() => {
+  const line = document.getElementById('trippaLine');
+  const thoughts = [
+    'Psst! Touch the world. It wiggles back.',
+    'A small poke can open a very large colour.',
+    'Hold on a moment; the portal is feeling dramatic.',
+    'Two fingers? Oho. You brought company.',
+    'If the picture melts, it is only thinking.',
+    'The quiet button is allowed. The colours can do the singing.'
+  ];
+  let next = 0;
+  const say = text => { if (line.textContent !== text) line.textContent = text; };
+  document.getElementById('trippaSpeak').addEventListener('click', () => {
+    next = (next + 1) % thoughts.length;
+    say(thoughts[next]);
+  });
+  document.getElementById('gl').addEventListener('pointerdown', event => {
+    say(event.pointerType === 'touch' ? 'Oho! Your finger found the soft part of reality.' : 'A small poke can open a very large colour.');
+  });
+  document.getElementById('bgBtn').addEventListener('click', () => say('New view, same tiny goblin. The horizon did a cartwheel.'));
+  document.getElementById('muteBtn').addEventListener('click', () => say('Sound is optional, little wanderer. The pixels still dance.'));
 })();
 </script>
 </body>
