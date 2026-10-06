@@ -114,9 +114,16 @@
     margin-top: 16px; color: #f66; font-size: 11px; letter-spacing: 0.08em;
     max-width: 320px; text-align: center; text-transform: none; display: none;
   }
+
+.trippa-pathways{position:fixed;z-index:12;top:10px;right:10px;display:flex;align-items:start;gap:5px;max-width:calc(100vw - 265px);font:700 10px/1.4 monospace;text-transform:uppercase}.trippa-pathways a,.trippa-pathways summary{display:block;min-height:36px;padding:9px 10px;border:1px solid #dfcded;background:#23132bea;color:#fff1c5;text-decoration:none;cursor:pointer}.trippa-pathways details{position:relative}.trippa-pathways summary::marker{content:''}.trippa-pathways details>div{position:absolute;top:calc(100% + 5px);right:0;width:190px;display:grid;gap:4px;background:#23132b;padding:7px;border:1px solid #dfcded}.trippa-pathways :focus-visible{outline:3px solid #ff4eaa;outline-offset:3px}@media(max-width:650px){.trippa-pathways{top:auto;bottom:12px;left:10px;right:auto;max-width:calc(100vw - 20px)}.trippa-pathways details>div{top:auto;bottom:calc(100% + 5px);left:0;right:auto}.trippa-pathways a,.trippa-pathways summary{font-size:9px;padding:9px 7px}}
+
 </style>
 </head>
 <body>
+<nav class="trippa-pathways" aria-label="Town pathways"><a id="trippa-home" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/?return=1">← Crossroads</a><details><summary>Other doors +</summary><div>
+<a data-town-path="bookshop/" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/bookshop/">Bookshop</a><a data-town-path="newsstand/" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/newsstand/">Newsstand</a><a data-town-path="tarot/" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/tarot/">Oracle</a><a data-town-path="rummage-yard/" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/rummage-yard/">Rummage Yard</a><a data-town-path="gossip-well/" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/gossip-well/">Gossip Well</a><a data-town-path="mushroom-post-office/" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/mushroom-post-office/">Post Office</a><a data-town-path="free-chaos-merch/" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/free-chaos-merch/">Chaos Merch</a>
+</div></details><a id="trippa-pocket" href="https://technicallytechnicaldesign.github.io/ACIDGOBLIN/?return=1&amp;pocket=open">Your pocket</a></nav>
+
 
 <div id="loading">
   <div id="splashTitle" aria-label="Acid Goblin, Trippa">ACID GOBLIN &middot; TRIPPA</div>
@@ -1136,5 +1143,13 @@ Promise.all(BG_DATA.map(loadTexture)).then((texs) => {
   document.getElementById('muteBtn').addEventListener('click', () => say('Sound is optional, little wanderer. The pixels still dance.'));
 })();
 </script>
+
+<script>(() => {
+ const local=/\/LOCAL_ACIDGOBLIN-TRIPPER\//.test(location.pathname);
+ const home=local?new URL('../LOCAL_ACIDGOBLIN/',location.href):new URL('https://technicallytechnicaldesign.github.io/ACIDGOBLIN/');
+ document.getElementById('trippa-home').href=new URL('?return=1',home);document.getElementById('trippa-pocket').href=new URL('?return=1&pocket=open',home);document.querySelectorAll('[data-town-path]').forEach(a=>a.href=new URL(a.dataset.townPath,home));
+ const doors=document.querySelector('.trippa-pathways details');document.addEventListener('pointerdown',e=>{if(!doors.contains(e.target))doors.open=false;});
+})();</script>
+
 </body>
 </html>
