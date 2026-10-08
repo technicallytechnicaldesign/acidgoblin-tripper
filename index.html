@@ -436,7 +436,7 @@ void main() {
 
   // stepping through: once committed, the peek above (u_bgNext) keeps
   // drifting to whatever comes after the *new* current, so it can't be
-  // trusted to still match what the maker just saw -- this wipe instead
+  // trusted to still match what the viewer just saw -- this wipe instead
   // targets u_bgB directly, which changeBackground() freezes to exactly
   // the committed image, and grows from the release point to swallow the
   // screen as a trippy torn dissolve rather than a hard cut.
@@ -688,7 +688,7 @@ function onPointerMove(e) {
 const PORTAL_COMMIT = 7.5;
 // drives the full-screen "step through" wipe once committed (see draw());
 // deliberately independent of any zone/heldFor bookkeeping so it can't
-// drift onto a different image than what the maker actually saw open
+// drift onto a different image than what the viewer actually saw open
 let portalCommit = null; // {x, y, startTime}
 const COMMIT_DURATION = 3400; // ms -- slower wash so stepping through lingers
 
